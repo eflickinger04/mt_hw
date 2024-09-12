@@ -41,3 +41,5 @@ for (f, e) in bitext:
       if dice[(f_i,e_j)] >= opts.threshold:
         sys.stdout.write("%i-%i " % (i,j))
   sys.stdout.write("\n")
+
+#Hi this is avery
