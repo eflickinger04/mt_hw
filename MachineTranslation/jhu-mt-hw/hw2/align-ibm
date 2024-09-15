@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+import optparse
+import sys
+from collections import defaultdict
+import math
+
+# Parse command-line options
+optparser = optparse.OptionParser()
+optparser.add_option("-d", "--data", dest="train", default="data/hansards", help="Data filename prefix (default=data)")
+optparser.add_option("-e", "--english", dest="english", default="e", help="Suffix of English filename (default=e)")
+optparser.add_option("-f", "--french", dest="french", default="f", help="Suffix of French filename (default=f)")
+optparser.add_option("-n", "--num_sentences", dest="num_sents", default=1000, type="int", help="Number of sentences to use for training and alignment")
+optparser.add_option("-i", "--iterations", dest="iterations", default=5, type="int", help="Number of EM iterations for IBM Model 1")
+(opts, _) = optparser.parse_args()
+
+# Load the data
+f_data = "%s.%s" % (opts.train, opts.french)
+e_data = "%s.%s" % (opts.train, opts.english)
+
+sys.stderr.write("Loading data...")
+bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))][:opts.num_sents]
+sys.stderr.write("Done\n")
+
+# Step 1: Initialize translation probabilities uniformly
+translation_prob = defaultdict(lambda: defaultdict(lambda: 1.0))  # P(f|e)
+
+# Step 2: EM algorithm for IBM Model 1
+sys.stderr.write("Training IBM Model 1 using EM...\n")
+for iteration in range(opts.iterations):
+    sys.stderr.write(f"Iteration {iteration + 1}/{opts.iterations}...\n")
+
+    # Initialize counts
+    count_e_given_f = defaultdict(float)  # C(e|f)
+    total_f = defaultdict(float)          # Total(f)
+
+    # E-step: Expectation
+    for (f, e) in bitext:
+        # Compute normalization for each sentence pair
+        total_e_given_f = defaultdict(float)
+        for e_j in e:
+            total_e_given_f[e_j] = sum(translation_prob[f_i][e_j] for f_i in f)
+
+        # Collect counts
+        for f_i in f:
+            for e_j in e:
+                count = translation_prob[f_i][e_j] / total_e_given_f[e_j]
+                count_e_given_f[(f_i, e_j)] += count
+                total_f[f_i] += count
+
+    # M-step: Maximization
+    for (f_i, e_j), count in count_e_given_f.items():
+        translation_prob[f_i][e_j] = count / total_f[f_i]
+
+sys.stderr.write("IBM Model 1 training complete.\n")
+
+# Step 3: Align sentences using the learned translation probabilities
+sys.stderr.write("Aligning sentences...\n")
+for (f, e) in bitext:
+    alignment = []
+    for i, f_i in enumerate(f):
+        best_prob = 0.0
+        best_j = 0
+        for j, e_j in enumerate(e):
+            if translation_prob[f_i][e_j] > best_prob:
+                best_prob = translation_prob[f_i][e_j]
+                best_j = j
+        alignment.append(f"{i}-{best_j}")
+    sys.stdout.write(" ".join(alignment) + "\n")
+sys.stderr.write("Alignment complete.\n")
