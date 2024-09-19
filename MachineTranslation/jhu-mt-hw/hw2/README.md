@@ -1,3 +1,13 @@
+To train the implemented IBM model on 10,000 sentences and report alignment error rate:
+
+python3 align-ibm -n 10000 | python score-alignments 
+
+To train the implemented IBM2 model on 10,000 sentences and report alignment error rate:
+
+python3 align-ibm2 -n 10000 | python score-alignments 
+
+
+
 There are three python programs here (`-h` for usage):
 
 - `./align` aligns words.
