@@ -6,6 +6,11 @@ To train the implemented IBM2 model on 10,000 sentences and report alignment err
 
 python3 align-ibm2 -n 10000 | python score-alignments 
 
+If you want to output the alignments to file called 
+"dice.a": 
+python align > dice .a
+python align-ibm > dice .a
+python align-ibm2 > dice .a
 
 -- Existing Text --
 There are three python programs here (`-h` for usage):
