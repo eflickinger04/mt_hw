@@ -17,3 +17,12 @@ opts = optparser.parse_args()[0]
 tm = models.TM(opts.tm, opts.k)
 lm = models.LM(opts.lm)
 french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+
+def beam_search_decoder(hypotheses, tm, lm, f, k):
+    possibilities = list()
+    # look through all the hypotheses
+    for h in hypotheses:
+        # look through all possible phrases
+        for i in range(len(f)):
+            for j in range(i + 1, len(f) + 1):
+                if sum(h.coverage[i:j]) == 0 and f[i:j] in tm:
