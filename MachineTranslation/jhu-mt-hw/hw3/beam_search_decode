@@ -2,27 +2,118 @@
 import optparse
 import sys
 import models
+import math
 from collections import namedtuple
 
-optparser = optparse.OptionParser()
-optparser.add_option("-i", "--input", dest="input", default="data/input", help="File containing sentences to translate (default=data/input)")
-optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
-optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
-optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxsize, type="int", help="Number of sentences to decode (default=no limit)")
-optparser.add_option("-k", "--translations-per-phrase", dest="k", default=1, type="int", help="Limit on number of translations to consider per phrase (default=1)")
-optparser.add_option("-s", "--stack-size", dest="s", default=1, type="int", help="Maximum stack size (default=1)")
-optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
-opts = optparser.parse_args()[0]
+class Hypothesis:
+    def __init__(self, score, seq_translated, source_parts_translated, end):
+        self.score = score
+        if source_parts_translated is None:
+            self.source_parts_translated = []
+        else:
+            self.source_parts_translated = source_parts_translated
+        if seq_translated is None:
+            self.seq_translated =  []
+        else:
+            self.seq_translated = seq_translated
+        self.end = end
 
-tm = models.TM(opts.tm, opts.k)
-lm = models.LM(opts.lm)
-french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+def beam_search_decoder(french, tm, lm, beam_width = 5, threshold = 0.85):
+    # Put an initial hypothesis into the beam
+    initial_h = Hypothesis(0.0, [], [0] * len(french), 0)
+    beam = [initial_h]
+    
+    # Look through all the words in the french sentence
+    for _ in range(len(french)):
+        possibilities = []
+        
+        for h in beam:
+            for i in range(len(french)):
+                for j in range(i + 1, len(french) + 1):
+                    # if phrase hasn't been translated before
+                    if sum(h.source_parts_translated[i:j]) == 0:
+                        phrase = tuple(french[i:j])
+                        if phrase in tm:
+                            translations = tm[phrase]
+                            for translation, phrase_probability in translations:
+                                # Updating the source parts that are translated
+                                new_source_parts_translated = h.source_parts_translated.copy()
+                                for k in range(i, j):
+                                    new_source_parts_translated[k] = 1
+                                # Calculating log probability
+                                if phrase_probability > 0:
+                                    phrase_log_probability = math.log(phrase_probability)
+                                else:
+                                    phrase_log_probability = -math.inf
+                                # Looking at the sequence that has been translated and its score
+                                if h.seq_translated:
+                                    prev_word = h.seq_translated[-1]
+                                else:
+                                    prev_word = '<s>'
+                                
+                                lm_score = lm.score(prev_word, translation)
+                                total_score = h.score + phrase_log_probability + lm_score
+                                new_seq_translated = h.seq_translated + [translation]
+                                new_end = j
+                                
+                                # Create the new hypothesis
+                                new_hypothesis = Hypothesis(total_score, new_seq_translated, new_source_parts_translated, new_end)
+                                possibilities.append(new_hypothesis)
+        
+        # No possibilities generated
+        if not possibilities:
+            break
+        # Sort score in descending order
+        possibilities.sort(reverse = True)
+        # Threshold pruning, keep only the first beam widths hypothesis
+        best_score = possibilities[0].score
+        pruned_translations = [h for h in possibilities if h.score >= best_score * threshold]
+        beam = pruned_translations[:beam_width]
+    
+    best_hypothesis = max(beam, key = lambda h:h.score)
+    return best_hypothesis.seq_translated
 
-def beam_search_decoder(hypotheses, tm, lm, f, k):
-    possibilities = list()
-    # look through all the hypotheses
-    for h in hypotheses:
-        # look through all possible phrases
-        for i in range(len(f)):
-            for j in range(i + 1, len(f) + 1):
-                if sum(h.coverage[i:j]) == 0 and f[i:j] in tm:
+def main():
+    # Check for correct usage
+    if len(sys.argv) != 3:
+        sys.stderr.write("Usage: python beam-search-decode <input_file> <output_file>\n")
+        sys.exit(1)
+    
+    # Correct path for the TM and LM files
+    tm = models.TM('data/tm', k=3)  # Ensure the correct path to 'tm' file
+    lm = models.LM('data/lm')       # Ensure the correct path to 'lm' file
+
+    # Read input French sentences
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+    with open(input_file, 'r') as f:
+        french = [line.strip().split() for line in f.readlines()]
+    with open(output_file, 'w') as output:
+        for idx, sentence in enumerate(french, 1):
+                translation = beam_search_decoder(sentence, tm, lm, beam_width=5, threshold=0.85)
+                translation_sentence = ' '.join(translation)
+                output.write(translation_sentence + "\n")
+                print(f"Completed translation for: {' '.join(sentence)}")
+    print(f"Translations written to {output_file}")
+
+   
+    # optparser = optparse.OptionParser()
+    # optparser.add_option("-i", "--input", dest="input", default="data/input", help="File containing sentences to translate (default=data/input)")
+    # optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
+    # optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
+    # optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxsize, type="int", help="Number of sentences to decode (default=no limit)")
+    # optparser.add_option("-k", "--translations-per-phrase", dest="k", default=1, type="int", help="Limit on number of translations to consider per phrase (default=1)")
+    # optparser.add_option("-s", "--stack-size", dest="s", default=1, type="int", help="Maximum stack size (default=1)")
+    # optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
+    # opts = optparser.parse_args()[0]
+
+    # tm = models.TM(opts.tm, opts.k)
+    # lm = models.LM(opts.lm)
+    # french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+
+    # if opts.verbose:
+    #     sys.stderr.write("Starting decoding process...\n")
+
+    # for idx, f in enumerate(french, 1):
+    #     translation = beam_search_decoder(f, tm, lm, beam_width=opts.s, threshold=0.85)
+    #     print(' '.join(translation))

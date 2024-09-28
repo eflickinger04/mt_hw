@@ -1,6 +1,6 @@
 import heapq
 import sys
-import models  # Using your models.py file
+import models  
 
 class AStarDecoder:
     def __init__(self, tm, lm, beam_size=10):
