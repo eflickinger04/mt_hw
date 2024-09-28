@@ -61,17 +61,8 @@ def beam_search_decoder(french, tm, lm, beam_width, threshold):
                                 if translation_tuple:
                                     curr_word = translation_tuple[0]
                                     result = lm.score(prev_word, (curr_word,))
-                                    
-                                    if isinstance(result, tuple):
-                                        if len(result) == 2:
-                                            new_lm_state, lm_score = result
-                                            lm_score = 0.0
-                                        else:
-                                            new_lm_state = current_lm_state
-                                            lm_score = 0.0
-                                    else:
-                                        new_lm_state = current_lm_state
-                                        lm_score = 0.0
+                                    new_lm_state, lm_score = result
+                                    lm_score = 0.0
                                 else:
                                     lm_score = 0.0
                                     new_lm_state = current_lm_state
