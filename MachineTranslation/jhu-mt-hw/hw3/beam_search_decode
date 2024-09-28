@@ -1,9 +1,6 @@
-#!/usr/bin/env python
-import heapq
 import sys
 import models
 import math
-import re
 from collections import namedtuple
 
 class Hypothesis:
@@ -19,22 +16,20 @@ class Hypothesis:
             self.seq_translated = seq_translated
         self.end = end
 
-def tokenize(text):
-    return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
-
 def beam_search_decoder(french, tm, lm, beam_width, threshold):
+
     # Initialize the beam with the initial hypothesis and LM state
-    initial_h = Hypothesis(0.0, [], [0] * len(french), 0)
+    initial_h = Hypothesis(score=0.0, seq_translated=[], source_parts_translated=[0] * len(french), end=0)
     lm_initial_state = ('<s>',)  
     beam = [(initial_h, lm_initial_state)]
-    
-    # Go through the french input
+
+    # Go through the French input
     for _ in range(len(french)):
         possibilities = []
         for h, current_lm_state in beam:
             for i in range(len(french)):
                 for j in range(i + 1, len(french) + 1):
-                    # if the phrase hasn't been translated yet
+                    # If the phrase hasn't been translated yet
                     if sum(h.source_parts_translated[i:j]) == 0:
                         phrase = tuple(french[i:j])
                         if phrase in tm:
@@ -47,76 +42,85 @@ def beam_search_decoder(french, tm, lm, beam_width, threshold):
                                     phrase_log_probability = math.log(phrase_probability)
                                 else:
                                     phrase_log_probability = -math.inf
-                                
-                                # Look at the alr translated sequence
+
+                                # Look at the previously translated sequence
                                 if h.seq_translated:
                                     prev_word = (h.seq_translated[-1],)
                                 else:
                                     prev_word = ('<s>',) 
-                                
-                                # Use tokenize to handle punctuation
-                                translation_tokens = tokenize(translation)
+
+                                translation_tokens = translation.split()
                                 translation_tuple = tuple(translation_tokens)
-                                
+
                                 if translation_tuple:
                                     curr_word = translation_tuple[0]
-                                    result = lm.score(prev_word, (curr_word,))
-                                    new_lm_state, lm_score = result
-                                    lm_score = 0.0
+                                    try:
+                                        new_lm_state, lm_score = lm.score(prev_word, (curr_word,))
+                                    except KeyError:
+                                        new_lm_state = current_lm_state
+                                        lm_score = -100.0  #Very low score so it doesn't pass threshold
                                 else:
                                     lm_score = 0.0
                                     new_lm_state = current_lm_state
-                                
-                                # Total score
+
+                                # Calc total score, new_seq_translated, new_end
                                 total_score = h.score + phrase_log_probability + lm_score
                                 new_seq_translated = h.seq_translated + translation_tokens
                                 new_end = j
-                                
-                                # New hypothesis
-                                new_hypothesis = Hypothesis(total_score, new_seq_translated, new_source_parts_translated, new_end)
-                                
-                                # Add the new hypothesis/lm state
+
+                                new_hypothesis = Hypothesis(
+                                    score=total_score,
+                                    seq_translated=new_seq_translated,
+                                    source_parts_translated=new_source_parts_translated,
+                                    end=new_end
+                                )
+
+                                # Append the new hypothesis and updated LM state
                                 possibilities.append((new_hypothesis, new_lm_state))
-        
-        # If no possibilites, end it 
+
+        # If no possibilities, end
         if not possibilities:
             break
-        
-        # Sort by descending order in score
+
+        # Sort all candidates by score in descending order
         possibilities.sort(key=lambda x: x[0].score, reverse=True)
-        
+
         # Threshold pruning
         best_score = possibilities[0][0].score
         pruned_translations = [h for h in possibilities if h[0].score >= best_score * threshold]
-        
-        # Add the pruned hypothesis
+
+        # Update the bean with the right translations
         beam = pruned_translations[:beam_width]
 
+    # Nothing in beam
+    if not beam:
+        return
+
+    # Choose best hypothesis
     best_hypothesis = max(beam, key=lambda x: x[0].score)[0]
     return best_hypothesis.seq_translated
 
 def main():
-    if len(sys.argv) != 3:
-        sys.stderr.write("Usage: python3 beam_search_decode <input_file> <output_file>\n")
-        sys.exit(1)
-    
-    tm = models.TM('data/tm', k=3)  
-    lm = models.LM('data/lm')       
-    # Read input French sentences
     input_file = sys.argv[1]
     output_file = sys.argv[2]
+    tm = models.TM('data/tm', k=sys.maxsize)  
+    lm = models.LM('data/lm')       
+
+    # Read input French sentences
     with open(input_file, 'r') as f:
-        french = [line.strip().split() for line in f.readlines() if line.strip()]
+        french = [tuple(line.strip().split()) for line in f.readlines() if line.strip()]
     
+    # Handling words not seen before
+    for word in set(sum(french, ())):
+        if (word,) not in tm:
+            tm[(word,)] = [models.phrase(word, 0.0)]
+
+    # Output file to write all the translations
     with open(output_file, 'w') as output:
         for idx, sentence in enumerate(french, 1):
-            print(f"Translating sentence {idx}: {' '.join(sentence)}")
             translation = beam_search_decoder(sentence, tm, lm, beam_width=5, threshold=0.85)
             translation_sentence = ' '.join(translation)
             output.write(translation_sentence + "\n")
-            print(f"Completed translation for: {' '.join(sentence)}")
-    print(f"Translations written to {output_file}")
 
 if __name__ == "__main__":
     main()
-
