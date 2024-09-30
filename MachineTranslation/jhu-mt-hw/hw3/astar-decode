@@ -1,0 +1,125 @@
+import sys
+import models
+import math
+from collections import namedtuple
+import heapq
+
+class Hypothesis:
+    def __init__(self, score, seq_translated, source_parts_translated, end):
+        self.score = score
+        self.seq_translated = seq_translated if seq_translated is not None else []
+        self.source_parts_translated = source_parts_translated if source_parts_translated is not None else [0] * len(seq_translated)
+        self.end = end
+
+    def __lt__(self, other):
+        # This allows the heapq to compare hypotheses based on score
+        return self.score < other.score
+
+def heuristic(french, tm, lm, seq_translated, remaining_parts):
+    # Simple heuristic: estimate future cost based on the length of remaining parts
+    # Can be refined using future phrase probabilities or language model predictions
+    remaining_phrases = len([x for x in remaining_parts if x == 0])
+    return -0.1 * remaining_phrases  # This is a placeholder heuristic
+
+def a_star_decoder(french, tm, lm, threshold):
+    # Priority queue (min-heap) for A* search
+    pq = []
+
+    # Initialize the search with the start state
+    initial_h = Hypothesis(score=0.0, seq_translated=[], source_parts_translated=[0] * len(french), end=0)
+    lm_initial_state = ('<s>',)
+    
+    # Push the initial hypothesis into the priority queue with its A* score
+    heapq.heappush(pq, (0.0, initial_h, lm_initial_state))
+    
+    # A* search
+    while pq:
+        # Get the hypothesis with the best score (lowest f(n) = g(n) + h(n))
+        _, h, current_lm_state = heapq.heappop(pq)
+        
+        # If all parts of the French sentence are translated, return the result
+        if sum(h.source_parts_translated) == len(french):
+            return h.seq_translated
+        
+        # Expand the current hypothesis by exploring translations of untranslated parts
+        for i in range(len(french)):
+            for j in range(i + 1, len(french) + 1):
+                if sum(h.source_parts_translated[i:j]) == 0:  # Part hasn't been translated yet
+                    phrase = tuple(french[i:j])
+                    if phrase in tm:
+                        translations = tm[phrase]
+                        for translation, phrase_probability in translations:
+                            new_source_parts_translated = h.source_parts_translated.copy()
+                            for k in range(i, j):
+                                new_source_parts_translated[k] = 1
+                            if phrase_probability > 0:
+                                phrase_log_probability = math.log(phrase_probability)
+                            else:
+                                phrase_log_probability = -math.inf
+
+                            # Look at the previously translated sequence
+                            if h.seq_translated:
+                                prev_word = (h.seq_translated[-1],)
+                            else:
+                                prev_word = ('<s>',)
+
+                            translation_tokens = translation.split()
+                            translation_tuple = tuple(translation_tokens)
+
+                            if translation_tuple:
+                                curr_word = translation_tuple[0]
+                                try:
+                                    new_lm_state, lm_score = lm.score(prev_word, (curr_word,))
+                                except KeyError:
+                                    new_lm_state = current_lm_state
+                                    lm_score = -100.0  # Low score if unknown bigram
+                            else:
+                                lm_score = 0.0
+                                new_lm_state = current_lm_state
+
+                            # Calculate g(n), the current total score
+                            g = h.score + phrase_log_probability + lm_score
+
+                            # Calculate h(n), the heuristic score
+                            h_estimate = heuristic(french, tm, lm, h.seq_translated, new_source_parts_translated)
+
+                            # f(n) = g(n) + h(n)
+                            f_score = g + h_estimate
+
+                            # Create a new hypothesis and push it into the priority queue
+                            new_seq_translated = h.seq_translated + translation_tokens
+                            new_hypothesis = Hypothesis(
+                                score=g,  # g(n) is the actual cost so far
+                                seq_translated=new_seq_translated,
+                                source_parts_translated=new_source_parts_translated,
+                                end=j
+                            )
+                            heapq.heappush(pq, (f_score, new_hypothesis, new_lm_state))
+    
+    # If no complete translation was found
+    return None
+
+def main():
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+    tm = models.TM('data/tm', k=sys.maxsize)
+    lm = models.LM('data/lm')
+
+    # Read input French sentences
+    with open(input_file, 'r') as f:
+        french = [tuple(line.strip().split()) for line in f.readlines() if line.strip()]
+
+    # Handling words not seen before
+    for word in set(sum(french, ())):
+        if (word,) not in tm:
+            tm[(word,)] = [models.phrase(word, 0.0)]
+
+    # Output file to write all the translations
+    with open(output_file, 'w') as output:
+        for idx, sentence in enumerate(french, 1):
+            translation = a_star_decoder(sentence, tm, lm, threshold=0.85)
+            translation_sentence = ' '.join(translation) if translation else "No translation found"
+            output.write(translation_sentence + "\n")
+
+if __name__ == "__main__":
+    main()

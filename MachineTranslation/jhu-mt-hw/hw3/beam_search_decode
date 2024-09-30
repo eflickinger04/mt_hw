@@ -1,11 +1,13 @@
+import heapq
 import sys
 import models
 import math
 from collections import namedtuple
 
 class Hypothesis:
-    def __init__(self, score, seq_translated, source_parts_translated, end):
+    def __init__(self, score, seq_translated, source_parts_translated, end, heuristic=0):
         self.score = score
+        self.heuristic = heuristic
         if source_parts_translated is None:
             self.source_parts_translated = []
         else:
@@ -16,89 +18,82 @@ class Hypothesis:
             self.seq_translated = seq_translated
         self.end = end
 
-def beam_search_decoder(french, tm, lm, beam_width, threshold):
+    def total_cost(self):
 
-    # Initialize the beam with the initial hypothesis and LM state
-    initial_h = Hypothesis(score=0.0, seq_translated=[], source_parts_translated=[0] * len(french), end=0)
-    lm_initial_state = ('<s>',)  
-    beam = [(initial_h, lm_initial_state)]
+        return self.score + self.heuristic
 
-    # Go through the French input
-    for _ in range(len(french)):
-        possibilities = []
-        for h, current_lm_state in beam:
-            for i in range(len(french)):
-                for j in range(i + 1, len(french) + 1):
-                    # If the phrase hasn't been translated yet
-                    if sum(h.source_parts_translated[i:j]) == 0:
-                        phrase = tuple(french[i:j])
-                        if phrase in tm:
-                            translations = tm[phrase]
-                            for translation, phrase_probability in translations:
-                                new_source_parts_translated = h.source_parts_translated.copy()
-                                for k in range(i, j):
-                                    new_source_parts_translated[k] = 1
-                                if phrase_probability > 0:
-                                    phrase_log_probability = math.log(phrase_probability)
-                                else:
-                                    phrase_log_probability = -math.inf
 
-                                # Look at the previously translated sequence
-                                if h.seq_translated:
-                                    prev_word = (h.seq_translated[-1],)
-                                else:
-                                    prev_word = ('<s>',) 
+    def __lt__(self, other):
+        return self.total_cost() < other.total_cost()
 
-                                translation_tokens = translation.split()
-                                translation_tuple = tuple(translation_tokens)
+def calculate_heuristic(untranslated_parts):
 
-                                if translation_tuple:
-                                    curr_word = translation_tuple[0]
-                                    try:
-                                        new_lm_state, lm_score = lm.score(prev_word, (curr_word,))
-                                    except KeyError:
-                                        new_lm_state = current_lm_state
-                                        lm_score = -100.0  #Very low score so it doesn't pass threshold
-                                else:
-                                    lm_score = 0.0
+    return untranslated_parts.count(0)
+
+def a_star_decoder(french, tm, lm, beam_width, threshold):
+
+    initial_h = Hypothesis(score=0.0, seq_translated=[], source_parts_translated=[0] * len(french), end=0, heuristic=len(french))
+    lm_initial_state = ('<s>',)
+    pq = [(initial_h.total_cost(), initial_h, lm_initial_state)]  # Priority queue based on total cost
+
+    while pq:
+        _, h, current_lm_state = heapq.heappop(pq)
+
+        if all(h.source_parts_translated):
+            return h.seq_translated
+
+        for i in range(len(french)):
+            for j in range(i + 1, len(french) + 1):
+                if sum(h.source_parts_translated[i:j]) == 0:
+                    phrase = tuple(french[i:j])
+                    if phrase in tm:
+                        translations = tm[phrase]
+                        for translation, phrase_probability in translations:
+                            new_source_parts_translated = h.source_parts_translated.copy()
+                            for k in range(i, j):
+                                new_source_parts_translated[k] = 1
+                            if phrase_probability > 0:
+                                phrase_log_probability = math.log(phrase_probability)
+                            else:
+                                phrase_log_probability = -math.inf
+
+                            # Look at the previously translated sequence
+                            if h.seq_translated:
+                                prev_word = (h.seq_translated[-1],)
+                            else:
+                                prev_word = ('<s>',)
+
+                            translation_tokens = translation.split()
+                            translation_tuple = tuple(translation_tokens)
+
+                            if translation_tuple:
+                                curr_word = translation_tuple[0]
+                                try:
+                                    new_lm_state, lm_score = lm.score(prev_word, (curr_word,))
+                                except KeyError:
                                     new_lm_state = current_lm_state
+                                    lm_score = -100.0 
+                            else:
+                                lm_score = 0.0
+                                new_lm_state = current_lm_state
 
-                                # Calc total score, new_seq_translated, new_end
-                                total_score = h.score + phrase_log_probability + lm_score
-                                new_seq_translated = h.seq_translated + translation_tokens
-                                new_end = j
+                            total_score = h.score + phrase_log_probability + lm_score
+                            new_seq_translated = h.seq_translated + translation_tokens
+                            new_end = j
 
-                                new_hypothesis = Hypothesis(
-                                    score=total_score,
-                                    seq_translated=new_seq_translated,
-                                    source_parts_translated=new_source_parts_translated,
-                                    end=new_end
-                                )
+                            # Calculate heuristic for the new hypothesis
+                            heuristic = calculate_heuristic(new_source_parts_translated)
+                            new_hypothesis = Hypothesis(
+                                score=total_score,
+                                seq_translated=new_seq_translated,
+                                source_parts_translated=new_source_parts_translated,
+                                end=new_end,
+                                heuristic=heuristic
+                            )
 
-                                # Append the new hypothesis and updated LM state
-                                possibilities.append((new_hypothesis, new_lm_state))
+                            heapq.heappush(pq, (new_hypothesis.total_cost(), new_hypothesis, new_lm_state))
 
-        # If no possibilities, end
-        if not possibilities:
-            break
-
-        # Sort all candidates by score in descending order
-        possibilities.sort(key=lambda x: x[0].score, reverse=True)
-
-        # Threshold pruning
-        best_score = possibilities[0][0].score
-        pruned_translations = [h for h in possibilities if h[0].score >= best_score * threshold]
-
-        # Update the bean with the right translations
-        beam = pruned_translations[:beam_width]
-
-    # Nothing in beam
-    if not beam:
-        return
-
-    # Choose best hypothesis
-    best_hypothesis = max(beam, key=lambda x: x[0].score)[0]
-    return best_hypothesis.seq_translated
+    return None
 
 def main():
     input_file = sys.argv[1]
@@ -106,20 +101,20 @@ def main():
     tm = models.TM('data/tm', k=sys.maxsize)  
     lm = models.LM('data/lm')       
 
-    # Read input French sentences
+
     with open(input_file, 'r') as f:
         french = [tuple(line.strip().split()) for line in f.readlines() if line.strip()]
     
-    # Handling words not seen before
+
     for word in set(sum(french, ())):
         if (word,) not in tm:
             tm[(word,)] = [models.phrase(word, 0.0)]
 
-    # Output file to write all the translations
+
     with open(output_file, 'w') as output:
         for idx, sentence in enumerate(french, 1):
-            translation = beam_search_decoder(sentence, tm, lm, beam_width=5, threshold=0.85)
-            translation_sentence = ' '.join(translation)
+            translation = a_star_decoder(sentence, tm, lm, beam_width=5, threshold=0.85)
+            translation_sentence = ' '.join(translation) if translation else ''
             output.write(translation_sentence + "\n")
 
 if __name__ == "__main__":
