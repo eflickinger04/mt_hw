@@ -148,7 +148,24 @@ class EncoderRNN(nn.Module):
         You should make your LSTM modular and re-use it in the Decoder.
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
+        class EncoderLSTM(nn.Module):
+            def __init__(self, input_size, hidden_size):
+                super(EncoderLSTM, self).__init__()
+                self.hidden_size = hidden_size
+                self.embedding = nn.Embedding(input_size, hidden_size)
+                self.lstm = nn.LSTM(hidden_size, hidden_size)
+
+            def forward(self, input, hidden):
+                embedded = self.embedding(input).view(1, 1, -1)
+                output, hidden = self.lstm(embedded, hidden)
+                return output, hidden
+
+            def initHidden(self):
+                return (torch.zeros(1, 1, self.hidden_size, device=device),
+                        torch.zeros(1, 1, self.hidden_size, device=device))
+                raise NotImplementedError
+                return output, hidden
+
         return output, hidden
 
 
@@ -157,7 +174,8 @@ class EncoderRNN(nn.Module):
         returns the output and the hidden state
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
+        embedded = self.embedding(input).view(1, 1, -1)
+        output, hidden = self.lstm(embedded, hidden)
         return output, hidden
 
     def get_initial_hidden_state(self):
@@ -179,9 +197,43 @@ class AttnDecoderRNN(nn.Module):
         """Initilize your word embedding, decoder LSTM, and weights needed for your attention here
         """
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
+        class AttentionDecoderLSTM(nn.Module):
+            def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
+                super(AttentionDecoderLSTM, self).__init__()
+                self.hidden_size = hidden_size
+                self.output_size = output_size
+                self.dropout_p = dropout_p
+                self.max_length = max_length
+                
+                # word embeddings
+                self.embedding = nn.Embedding(self.output_size, self.hidden_size)
+                
+                # lstm
+                self.lstm = nn.LSTM(self.hidden_size, self.hidden_size)
+                
+                # attention weights
+                self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
+                self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
+                
+                self.dropout = nn.Dropout(self.dropout_p)
+                self.out = nn.Linear(self.hidden_size, self.output_size)
 
-        self.out = nn.Linear(self.hidden_size, self.output_size)
+            def forward(self, input, hidden, encoder_outputs):
+                embedded = self.embedding(input).view(1, 1, -1)
+                embedded = self.dropout(embedded)
+                
+                # attention
+                attn_weights = F.softmax(self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
+                attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))
+                
+                output = torch.cat((embedded[0], attn_applied[0]), 1)
+                output = self.attn_combine(output).unsqueeze(0)
+                
+                output = F.relu(output)
+                output, hidden = self.lstm(output, hidden)
+                
+                output = F.log_softmax(self.out(output[0]), dim=1)
+                return output, hidden, attn_weights
 
     def forward(self, input, hidden, encoder_outputs):
         """runs the forward pass of the decoder
@@ -191,7 +243,23 @@ class AttnDecoderRNN(nn.Module):
         """
         
         "*** YOUR CODE HERE ***"
-        raise NotImplementedError
+        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(embedded)
+
+        # attention weights
+        attn_weights = F.softmax(self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))
+
+        # attention+bedding
+        output = torch.cat((embedded[0], attn_applied[0]), 1)
+        output = self.attn_combine(output).unsqueeze(0)
+
+        output = F.relu(output)
+        output, hidden = self.lstm(output, hidden)
+
+        # output + softmax 
+        log_softmax = F.log_softmax(self.out(output[0]), dim=1)
+
         return log_softmax, hidden, attn_weights
 
     def get_initial_hidden_state(self):
@@ -298,7 +366,24 @@ def show_attention(input_sentence, output_words, attentions):
     """
     
     "*** YOUR CODE HERE ***"
-    raise NotImplementedError
+    fig, ax = plt.subplots(figsize=(10, 8)) 
+    
+    cax = ax.matshow(attentions.numpy(), cmap='viridis')
+    
+    ax.set_xticklabels([''] + input_sentence.split(' ') + ['<EOS>'], rotation=90)
+    ax.set_yticklabels([''] + output_words)
+    
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+    
+    fig.colorbar(cax)
+    plt.xlabel('Source Sentence')
+    plt.ylabel('Target Translation')
+    
+    plt.title('Attention Heatmap') 
+    plt.savefig('attention_plot.png')
+    plt.show()  # Display the plot
+    #raise NotImplementedError
 
 
 def translate_and_show_attention(input_sentence, encoder1, decoder1, src_vocab, tgt_vocab):
