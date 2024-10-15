@@ -182,25 +182,33 @@ class EncoderRNN(nn.Module):
         You should make your LSTM modular and re-use it in the Decoder.
         """
         "*** YOUR CODE HERE ***"
+        self.bwd = True
         self.embedding = nn.Embedding(input_size, hidden_size)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
         """runs the forward pass of the encoder returns the output and the hidden state"""
-        h_t, c_t = hidden  
-        batch_size, sequence_len = input.size(0), input.size(1)  
+        h_t_fwd, c_t_fwd = hidden  # forward hidden state
+        h_t_bwd, c_t_bwd = hidden  # backward hidden state
+        batch_size, sequence_len = input.size(0), input.size(1)
         outputs = [] 
-        embedded = self.embedding(input)   
+        embedded = self.embedding(input)
+        # Forward Direction
         for t in range(sequence_len):
-            x_t = input[:, t, :] 
-            h_t, c_t = self.lstm(x_t, h_t, c_t)  
-            outputs.append(h_t.unsqueeze(1))  
-        output = torch.cat(outputs, dim=1) 
-        hidden = (h_t, c_t)
+            x_t_fwd = embedded[:, t, :]
+            h_t_fwd, c_t_fwd = self.lstm(x_t_fwd, h_t_fwd, c_t_fwd)
+            outputs.append(h_t_fwd.unsqueeze(1))
+        # Backward Direction
+        for t in reversed(range(sequence_len)):
+            x_t_bwd = embedded[:, t, :]
+            h_t_bwd, c_t_bwd = self.lstm(x_t_bwd, h_t_bwd, c_t_bwd)
+            outputs[t] = torch.cat([outputs[t], h_t_bwd.unsqueeze(1)], dim=2)
+        output = torch.cat(outputs, dim=1)
+        hidden = (torch.cat((h_t_fwd, h_t_bwd), dim=2), torch.cat((c_t_fwd, c_t_bwd), dim=2))  
         return output, hidden
 
     def get_initial_hidden_state(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        return torch.zeros(2, 1, self.hidden_size, device=device)
 
 
 class AttnDecoderRNN(nn.Module):
@@ -219,8 +227,8 @@ class AttnDecoderRNN(nn.Module):
         """
         "*** YOUR CODE HERE ***"
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.attn = nn.Linear(hidden_size * 2, max_length)
-        self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
+        self.attn = nn.Linear(hidden_size * 4, max_length)
+        self.attn_combine = nn.Linear(hidden_size * 4, hidden_size)
         self.out = nn.Linear(self.hidden_size, self.output_size)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
         
@@ -307,7 +315,7 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
         input_length = input_tensor.size()[0]
         encoder_hidden = encoder.get_initial_hidden_state()
 
-        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
+        encoder_outputs = torch.zeros(max_length, encoder.hidden_size * 2, device=device)
 
         for ei in range(input_length):
             encoder_output, encoder_hidden = encoder(input_tensor[ei],
@@ -316,7 +324,7 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
 
         decoder_input = torch.tensor([[SOS_index]], device=device)
 
-        decoder_hidden = encoder_hidden
+        decoder_hidden = (encoder_hidden[0].view(1, -1), encoder_hidden[1].view(1, -1))
 
         decoded_words = []
         decoder_attentions = torch.zeros(max_length, max_length)
