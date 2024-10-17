@@ -27,7 +27,7 @@ import matplotlib.ticker as ticker
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from nltk.translate.bleu_score import corpus_bleu
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from torch import optim
 
 
@@ -512,7 +512,8 @@ def main():
 
             references = [[clean(pair[1]).split(), ] for pair in dev_pairs[:len(translated_sentences)]]
             candidates = [clean(sent).split() for sent in translated_sentences]
-            dev_bleu = corpus_bleu(references, candidates)
+            smoothing_function = SmoothingFunction().method1
+            dev_bleu = corpus_bleu(references, candidates, smoothing_function=smoothing_function)
             logging.info('Dev BLEU score: %.2f', dev_bleu)
 
     # translate test set and write to file
