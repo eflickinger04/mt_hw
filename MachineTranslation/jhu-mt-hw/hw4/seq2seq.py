@@ -205,7 +205,7 @@ class AttnDecoderRNN(nn.Module):
         self.max_length = max_length
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.attn = nn.Linear(hidden_size * 2, max_length)  # hidden_size * 2 to match concatenation of hidden and embedded
+        self.attn = nn.Linear(hidden_size * 2, max_length)  
         self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
         self.dropout = nn.Dropout(self.dropout_p)
         self.out = nn.Linear(hidden_size, output_size)
@@ -218,22 +218,18 @@ class AttnDecoderRNN(nn.Module):
         Dropout (self.dropout) should be applied to the word embeddings.
         """
         h_t, c_t = hidden
-        embedded = self.embedding(input).view(1, -1)  # (1, hidden_size)
-        embedded = self.dropout(embedded)
+        word_embeddings = self.embedding(input).view(1, -1) 
+        word_embeddings = self.dropout(word_embeddings)
 
-        # Calculate attention weights and apply to encoder outputs
-        attn_weights = F.softmax(self.attn(torch.cat((embedded, h_t), 1)), dim=1)  # (1, max_length)
-        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  # (1, 1, hidden_size * 2)
+        attn_weights = F.softmax(self.attn(torch.cat((word_embeddings, h_t), 1)), dim=1)  
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  
+        output = torch.cat((word_embeddings, attn_applied.squeeze(0)), 1)  
+        output = F.relu(self.attn_combine(output))
 
-        # Combine embedded input word and attended context
-        output = torch.cat((embedded, attn_applied.squeeze(0)), 1)  # (1, hidden_size * 2)
-        output = self.attn_combine(output).unsqueeze(0)  # (1, 1, hidden_size)
-
-        # Pass through LSTM
-        h_t, c_t = self.lstm(output[0], h_t, c_t)
-
-        # Generate output word prediction
-        log_softmax = F.log_softmax(self.out(h_t), dim=1)  # (1, output_size)
+        # pass the output and previous hidden values through the lstm
+        h_t, c_t = self.lstm(output, h_t, c_t)
+        
+        log_softmax = F.log_softmax(self.out(h_t), dim=1)  
         hidden = (h_t, c_t)
 
         return log_softmax, hidden, attn_weights
@@ -321,19 +317,17 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder.get_initial_hidden_state(input_tensor.size(0))
+        encoder.get_initial_hidden_state()
 
-        encoder_outputs = torch.zeros(max_length, encoder.hidden_size * 2, device=device)
+        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
         for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei].unsqueeze(0), encoder_hidden)
-            encoder_outputs[ei] = encoder_output[0, 0]
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+            encoder_outputs[ei] = encoder_output[0] #changed here for bidirectional lstm
 
         decoder_input = torch.tensor([[SOS_index]], device=device)
 
-        decoder_hidden = (
-            torch.cat((encoder_hidden[0][-2], encoder_hidden[0][-1]), dim=1).unsqueeze(0),
-            torch.cat((encoder_hidden[1][-2], encoder_hidden[1][-1]), dim=1).unsqueeze(0))
+        decoder_hidden = encoder_hidden
 
         decoded_words = []
         decoder_attentions = torch.zeros(max_length, max_length)
