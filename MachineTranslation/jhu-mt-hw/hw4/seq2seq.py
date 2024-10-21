@@ -286,19 +286,17 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder.get_initial_hidden_state(input_tensor.size(0))
+        encoder.get_initial_hidden_state()
 
-        encoder_outputs = torch.zeros(max_length, encoder.hidden_size * 2, device=device)
+        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
         for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei].unsqueeze(0), encoder_hidden)
-            encoder_outputs[ei] = encoder_output[0, 0]
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+            encoder_outputs[ei] = encoder_output[0] #changed here for bidirectional lstm
 
         decoder_input = torch.tensor([[SOS_index]], device=device)
 
-        decoder_hidden = (
-            torch.cat((encoder_hidden[0][-2], encoder_hidden[0][-1]), dim=1).unsqueeze(0),
-            torch.cat((encoder_hidden[1][-2], encoder_hidden[1][-1]), dim=1).unsqueeze(0))
+        decoder_hidden = encoder_hidden
 
         decoded_words = []
         decoder_attentions = torch.zeros(max_length, max_length)
