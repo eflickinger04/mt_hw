@@ -253,26 +253,57 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
 
     "*** YOUR CODE HERE ***"
     optimizer.zero_grad()
-    input_len, target_len = input_tensor.size(0), target_tensor.size(0)
+    input_length, target_length = input_tensor.size(0), target_tensor.size(0)
     loss = 0
 
-    #Forward pass on encoder
-    encoder_output, encoder_hidden = encoder(input_tensor, encoder_hidden)
-
-    decoder_input = torch.tensor([[SOS_index]], device=input_tensor.device)
+    #initialize encoder with zeros
+    encoder_output_t = torch.zeros(max_length, encoder.hidden_size, device=device)
+    encoder_hidden = encoder.get_initial_hidden_state()
+    decoder_input = torch.tensor([[SOS_index]], device=device)
     decoder_hidden = encoder_hidden
 
-    for i in range(target_len):
-        # run decoder and get loss
-        decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output)
-        loss += criterion(decoder_output, target_tensor[i].unsqueeze(0))
-        # Set as new input
-        decoder_input = target_tensor[i].unsqueeze(0)
-    loss.backward()
-    optimizer.step()
-    # raise NotImplementedError
+    for ei in range(input_length):
+        encoder_output = encoder(input_tensor[ei], encoder_hidden)
+        encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+        encoder_output_t[ei] = encoder_output[0]
 
-    return loss.item() / target_len
+    teacher_force = True
+    if random.random() > 0.5:
+        teacher_force = False
+
+    #if it meets the teacher force criteria 
+    if teacher_force: 
+            for di in range(target_length):
+                decoder_output = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                loss += criterion(decoder_output, target_tensor[di])
+                #use previous value to teacher force
+                decoder_input = target_tensor[di]
+                if decoder_intput.item() == EOS_index:
+                    break
+    else: 
+        for di in range(target_length):
+                decoder_output = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                loss += criterion(decoder_output, target_tensor[di])
+                #if not teacher forcing, get the top prediction and detach from history 
+                top_v = decoder_output.data.topk(1)
+                top_i = decoder_output.data.topk(1)
+                decoder_input = top_i.squeeze().detach()
+                if decoder_intput.item() == EOS_index:
+                    break
+
+    loss.backward()
+    max_norm_val = 1.0
+    #encoder
+    torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm = max_norm_val)
+    #decoder
+    torch.nn.utils.clip_grad_norm_(decoder.parameters(), max_norm = max_norm_val)
+    #step 
+    optimizer.step()
+    return loss.item() / target_length
 
 
 
