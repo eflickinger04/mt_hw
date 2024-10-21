@@ -216,7 +216,7 @@ class AttnDecoderRNN(nn.Module):
         self.max_length = max_length
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.attn = nn.Linear(hidden_size * 2, max_length)  # hidden_size * 2 to match concatenation of hidden and embedded
+        self.attn = nn.Linear(hidden_size * 2, max_length)  
         self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
         self.dropout = nn.Dropout(self.dropout_p)
         self.out = nn.Linear(hidden_size, output_size)
@@ -229,22 +229,18 @@ class AttnDecoderRNN(nn.Module):
         Dropout (self.dropout) should be applied to the word embeddings.
         """
         h_t, c_t = hidden
-        embedded = self.embedding(input).view(1, -1)  # (1, hidden_size)
+        embedded = self.embedding(input).view(1, -1) 
         embedded = self.dropout(embedded)
 
-        # Calculate attention weights and apply to encoder outputs
-        attn_weights = F.softmax(self.attn(torch.cat((embedded, h_t), 1)), dim=1)  # (1, max_length)
-        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  # (1, 1, hidden_size * 2)
+        attn_weights = F.softmax(self.attn(torch.cat((embedded, h_t), 1)), dim=1)  
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  
+        output = torch.cat((embedded, attn_applied.squeeze(0)), 1)  
+        output = F.relu(self.attn_combine(output))
 
-        # Combine embedded input word and attended context
-        output = torch.cat((embedded, attn_applied.squeeze(0)), 1)  # (1, hidden_size * 2)
-        output = self.attn_combine(output).unsqueeze(0)  # (1, 1, hidden_size)
-
-        # Pass through LSTM
-        h_t, c_t = self.lstm(output[0], h_t, c_t)
-
-        # Generate output word prediction
-        log_softmax = F.log_softmax(self.out(h_t), dim=1)  # (1, output_size)
+        # pass the output and previous hidden values through the lstm
+        h_t, c_t = self.lstm(output, h_t, c_t)
+        
+        log_softmax = F.log_softmax(self.out(h_t), dim=1)  
         hidden = (h_t, c_t)
 
         return log_softmax, hidden, attn_weights
