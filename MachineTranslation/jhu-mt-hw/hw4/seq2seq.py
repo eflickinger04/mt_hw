@@ -178,11 +178,11 @@ class EncoderRNN(nn.Module):
         self.lstm = CustomLSTM(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
-        batch_size, sequence_len = input.size(0), input.size(1)
+        # batch_size, sequence_len = input.size(0), input.size(1)
         outputs = [] 
         embedded = self.dropout(self.embedding(input).view(1,-1))
         ct_previous, ht_previous = hidden
-        ct, ht = self.lstm_cell(embedded, ht_previous, ct_previous)
+        ct, ht = self.lstm(embedded, ht_previous, ct_previous)
         output_1 = ht
         output_2 = (ht, ct)
         return output_1, output_2
@@ -241,7 +241,7 @@ class AttnDecoderRNN(nn.Module):
 ######################################################################
 
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
-    encoder_hidden = encoder.get_initial_hidden_state(input_tensor.size(0))
+    encoder_hidden = encoder.get_initial_hidden_state()
 
     # make sure the encoder and decoder are in training mode so dropout is applied
     encoder.train()
