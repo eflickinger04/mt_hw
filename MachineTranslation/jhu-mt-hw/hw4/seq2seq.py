@@ -181,15 +181,15 @@ class EncoderRNN(nn.Module):
         # batch_size, sequence_len = input.size(0), input.size(1)
         outputs = [] 
         embedded = self.dropout(self.embedding(input).view(1,-1))
-        ct_previous, ht_previous = hidden
-        ct, ht = self.lstm(embedded, ht_previous, ct_previous)
+        ht_previous, ct_previous = hidden
+        ht, ct = self.lstm(embedded, ht_previous, ct_previous)
         output_1 = ht
         output_2 = (ht, ct)
         return output_1, output_2
 
     def get_initial_hidden_state(self):
-        h = torch.zeros(1, 1, self.hidden_size, device=device)
-        c = torch.zeros(1, 1, self.hidden_size, device=device)
+        h = torch.zeros(1, self.hidden_size, device=device)
+        c = torch.zeros(1, self.hidden_size, device=device)
         output = (h, c)
         return output 
 
