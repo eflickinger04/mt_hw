@@ -137,32 +137,22 @@ class CustomLSTM(nn.Module):
     def __init__(self, input_size, hidden_size):
         super(CustomLSTM, self).__init__()
         self.hidden_size = hidden_size
+        self.input_size = input_size
         self.W_f = nn.Linear(input_size + hidden_size, hidden_size)  # Forget gate
-        self.U_f = nn.Linear(hidden_size, hidden_size)
-        self.b_f = nn.Parameter(torch.zeros(hidden_size))
-
         self.W_i = nn.Linear(input_size + hidden_size, hidden_size)  # Input gate
-        self.U_i = nn.Linear(hidden_size, hidden_size)
-        self.b_i = nn.Parameter(torch.zeros(hidden_size))
-
         self.W_o = nn.Linear(input_size + hidden_size, hidden_size)  # Output gate
-        self.U_o = nn.Linear(hidden_size, hidden_size)
-        self.b_o = nn.Parameter(torch.zeros(hidden_size))
-
         self.W_c = nn.Linear(input_size + hidden_size, hidden_size)  # Cell input
-        self.U_c = nn.Linear(hidden_size, hidden_size)
-        self.b_c = nn.Parameter(torch.zeros(hidden_size))
 
     def forward(self, x_t, h_prev, c_prev):
         combined_vector = torch.cat((x_t, h_prev), dim=1)
         # Forget gate
-        f_t = torch.sigmoid(self.W_f(combined_vector) + self.b_f)
+        f_t = torch.sigmoid(self.W_f(combined_vector))
         # Input gate
-        i_t = torch.sigmoid(self.W_i(combined_vector) + self.b_i)
+        i_t = torch.sigmoid(self.W_i(combined_vector))
         # Output gate
-        o_t = torch.sigmoid(self.W_o(combined_vector) + self.b_o)
+        o_t = torch.sigmoid(self.W_o(combined_vector))
         # Cell candidate
-        c_tilde = torch.tanh(self.W_c(combined_vector) + self.b_c)
+        c_tilde = torch.tanh(self.W_c(combined_vector))
         # Cell state
         c_t = f_t * c_prev + i_t * c_tilde
         # Hidden state
@@ -214,17 +204,12 @@ class AttnDecoderRNN(nn.Module):
         self.dropout_p = dropout_p
         self.max_length = max_length
 
-        self.dropout = nn.Dropout(self.dropout_p)
-        
-        """Initilize your word embedding, decoder LSTM, and weights needed for your attention here
-        """
-        "*** YOUR CODE HERE ***"
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.attn = nn.Linear(hidden_size * 4, max_length)
-        self.attn_combine = nn.Linear(hidden_size * 4, hidden_size)
-        self.out = nn.Linear(self.hidden_size, self.output_size)
+        self.attn = nn.Linear(hidden_size * 2, max_length)  # hidden_size * 2 to match concatenation of hidden and embedded
+        self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
+        self.dropout = nn.Dropout(self.dropout_p)
+        self.out = nn.Linear(hidden_size, output_size)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
-        
 
     def forward(self, input, hidden, encoder_outputs):
         """runs the forward pass of the decoder
@@ -232,36 +217,35 @@ class AttnDecoderRNN(nn.Module):
         
         Dropout (self.dropout) should be applied to the word embeddings.
         """
-        
-        "*** YOUR CODE HERE ***"
         h_t, c_t = hidden
-        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.embedding(input).view(1, -1)  # (1, hidden_size)
         embedded = self.dropout(embedded)
 
-        # attention weights
-        attn_weights = F.softmax(self.attn(torch.cat((embedded[0], h_t), 1)), dim=1)
-        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))
+        # Calculate attention weights and apply to encoder outputs
+        attn_weights = F.softmax(self.attn(torch.cat((embedded, h_t), 1)), dim=1)  # (1, max_length)
+        attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  # (1, 1, hidden_size * 2)
 
-        # attention+bedding
-        output = torch.cat((embedded[0], attn_applied[0]), 1)
-        output = self.attn_combine(output).unsqueeze(0)
+        # Combine embedded input word and attended context
+        output = torch.cat((embedded, attn_applied.squeeze(0)), 1)  # (1, hidden_size * 2)
+        output = self.attn_combine(output).unsqueeze(0)  # (1, 1, hidden_size)
 
+        # Pass through LSTM
         h_t, c_t = self.lstm(output[0], h_t, c_t)
 
-        # output + softmax 
-        log_softmax = F.log_softmax(self.out(h_t), dim=1)
+        # Generate output word prediction
+        log_softmax = F.log_softmax(self.out(h_t), dim=1)  # (1, output_size)
         hidden = (h_t, c_t)
 
         return log_softmax, hidden, attn_weights
 
     def get_initial_hidden_state(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        return torch.zeros(1, self.hidden_size, device=device), torch.zeros(1, self.hidden_size, device=device)
 
 
 ######################################################################
 
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
-    encoder_hidden = encoder.get_initial_hidden_state()
+    encoder_hidden = encoder.get_initial_hidden_state(input_tensor.size(0))
 
     # make sure the encoder and decoder are in training mode so dropout is applied
     encoder.train()
@@ -306,18 +290,19 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder_hidden = encoder.get_initial_hidden_state()
+        encoder.get_initial_hidden_state(input_tensor.size(0))
 
         encoder_outputs = torch.zeros(max_length, encoder.hidden_size * 2, device=device)
 
         for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei],
-                                                     encoder_hidden)
-            encoder_outputs[ei] += encoder_output[0, 0]
+            encoder_output, encoder_hidden = encoder(input_tensor[ei].unsqueeze(0), encoder_hidden)
+            encoder_outputs[ei] = encoder_output[0, 0]
 
         decoder_input = torch.tensor([[SOS_index]], device=device)
 
-        decoder_hidden = (encoder_hidden[0].view(1, -1), encoder_hidden[1].view(1, -1))
+        decoder_hidden = (
+            torch.cat((encoder_hidden[0][-2], encoder_hidden[0][-1]), dim=1).unsqueeze(0),
+            torch.cat((encoder_hidden[1][-2], encoder_hidden[1][-1]), dim=1).unsqueeze(0))
 
         decoded_words = []
         decoder_attentions = torch.zeros(max_length, max_length)
