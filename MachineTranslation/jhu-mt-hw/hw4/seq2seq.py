@@ -182,33 +182,26 @@ class EncoderRNN(nn.Module):
         You should make your LSTM modular and re-use it in the Decoder.
         """
         "*** YOUR CODE HERE ***"
-        self.bwd = True
+        drop = 0.1
         self.embedding = nn.Embedding(input_size, hidden_size)
+        self.dropout = nn.Dropout(drop)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
-        """runs the forward pass of the encoder returns the output and the hidden state"""
-        h_t_fwd, c_t_fwd = hidden  # forward hidden state
-        h_t_bwd, c_t_bwd = hidden  # backward hidden state
         batch_size, sequence_len = input.size(0), input.size(1)
         outputs = [] 
-        embedded = self.embedding(input)
-        # Forward Direction
-        for t in range(sequence_len):
-            x_t_fwd = embedded[:, t, :]
-            h_t_fwd, c_t_fwd = self.lstm(x_t_fwd, h_t_fwd, c_t_fwd)
-            outputs.append(h_t_fwd.unsqueeze(1))
-        # Backward Direction
-        for t in reversed(range(sequence_len)):
-            x_t_bwd = embedded[:, t, :]
-            h_t_bwd, c_t_bwd = self.lstm(x_t_bwd, h_t_bwd, c_t_bwd)
-            outputs[t] = torch.cat([outputs[t], h_t_bwd.unsqueeze(1)], dim=2)
-        output = torch.cat(outputs, dim=1)
-        hidden = (torch.cat((h_t_fwd, h_t_bwd), dim=2), torch.cat((c_t_fwd, c_t_bwd), dim=2))  
-        return output, hidden
+        embedded = self.dropout(self.embedding(input).view(1,-1))
+        ct_previous, ht_previous = hidden
+        ct, ht = self.lstm_cell(embedded, ht_previous, ct_previous)
+        output_1 = ht
+        output_2 = (ht, ct)
+        return output_1, output_2
 
     def get_initial_hidden_state(self):
-        return torch.zeros(2, 1, self.hidden_size, device=device)
+        h = torch.zeros(1, 1, self.hidden_size, device=device)
+        c = torch.zeros(1, 1, self.hidden_size, device=device)
+        output = (h, c)
+        return output 
 
 
 class AttnDecoderRNN(nn.Module):
