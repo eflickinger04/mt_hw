@@ -241,7 +241,7 @@ class AttnDecoderRNN(nn.Module):
 ######################################################################
 
 def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
-    encoder_hidden = encoder.get_initial_hidden_state(input_tensor.size(0))
+    encoder_hidden = encoder.get_initial_hidden_state()
 
     # make sure the encoder and decoder are in training mode so dropout is applied
     encoder.train()
