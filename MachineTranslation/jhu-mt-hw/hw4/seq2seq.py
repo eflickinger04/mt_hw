@@ -218,12 +218,12 @@ class AttnDecoderRNN(nn.Module):
         Dropout (self.dropout) should be applied to the word embeddings.
         """
         h_t, c_t = hidden
-        embedded = self.embedding(input).view(1, -1) 
-        embedded = self.dropout(embedded)
+        word_embeddings = self.embedding(input).view(1, -1) 
+        word_embeddings = self.dropout(word_embeddings)
 
-        attn_weights = F.softmax(self.attn(torch.cat((embedded, h_t), 1)), dim=1)  
+        attn_weights = F.softmax(self.attn(torch.cat((word_embeddings, h_t), 1)), dim=1)  
         attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  
-        output = torch.cat((embedded, attn_applied.squeeze(0)), 1)  
+        output = torch.cat((word_embeddings, attn_applied.squeeze(0)), 1)  
         output = F.relu(self.attn_combine(output))
 
         # pass the output and previous hidden values through the lstm
