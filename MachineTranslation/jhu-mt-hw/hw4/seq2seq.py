@@ -172,10 +172,10 @@ class EncoderRNN(nn.Module):
         You should make your LSTM modular and re-use it in the Decoder.
         """
         "*** YOUR CODE HERE ***"
-        drop = 0.1
         self.embedding = nn.Embedding(input_size, hidden_size)
-        self.dropout = nn.Dropout(drop)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
+        drop = 0.1
+        self.dropout = nn.Dropout(drop)
 
     def forward(self, input, hidden):
         # batch_size, sequence_len = input.size(0), input.size(1)
@@ -183,15 +183,12 @@ class EncoderRNN(nn.Module):
         embedded = self.dropout(self.embedding(input).view(1,-1))
         ht_previous, ct_previous = hidden
         ht, ct = self.lstm(embedded, ht_previous, ct_previous)
-        output_1 = ht
-        output_2 = (ht, ct)
-        return output_1, output_2
+        output = ht
+        hidden = (ht, ct)
+        return output, hidden
 
     def get_initial_hidden_state(self):
-        h = torch.zeros(1, self.hidden_size, device=device)
-        c = torch.zeros(1, self.hidden_size, device=device)
-        output = (h, c)
-        return output 
+        return (torch.zeros(1, self.hidden_size, device=device), torch.zeros(1, self.hidden_size, device=device))
 
 
 class AttnDecoderRNN(nn.Module):
@@ -202,12 +199,11 @@ class AttnDecoderRNN(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout_p = dropout_p
+        self.dropout = nn.Dropout(self.dropout_p)
         self.max_length = max_length
-
         self.embedding = nn.Embedding(output_size, hidden_size)
         self.attn = nn.Linear(hidden_size * 2, max_length)  
         self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
-        self.dropout = nn.Dropout(self.dropout_p)
         self.out = nn.Linear(hidden_size, output_size)
         self.lstm = CustomLSTM(hidden_size, hidden_size)
 
@@ -223,8 +219,7 @@ class AttnDecoderRNN(nn.Module):
 
         attn_weights = F.softmax(self.attn(torch.cat((word_embeddings, h_t), 1)), dim=1)  
         attn_applied = torch.bmm(attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0))  
-        output = torch.cat((word_embeddings, attn_applied.squeeze(0)), 1)  
-        output = F.relu(self.attn_combine(output))
+        output = F.relu(self.attn_combine(torch.cat((word_embeddings, attn_applied.squeeze(0)), 1)  ))
 
         # pass the output and previous hidden values through the lstm
         h_t, c_t = self.lstm(output, h_t, c_t)
@@ -254,41 +249,34 @@ def train(input_tensor, target_tensor, encoder, decoder, optimizer, criterion, m
 
     #initialize encoder with zeros
     encoder_output_t = torch.zeros(max_length, encoder.hidden_size, device=device)
-    encoder_hidden = encoder.get_initial_hidden_state()
+    # encoder_hidden = encoder.get_initial_hidden_state()
+
+    for ei in range(input_length):
+        encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+        encoder_output_t[ei] = encoder_output[0]
+
     decoder_input = torch.tensor([[SOS_index]], device=device)
     decoder_hidden = encoder_hidden
 
-    for ei in range(input_length):
-        encoder_output = encoder(input_tensor[ei], encoder_hidden)
-        encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
-        encoder_output_t[ei] = encoder_output[0]
-
-    teacher_force = True
-    if random.random() > 0.5:
-        teacher_force = False
+    teacher_force = random.random() < 0.5
 
     #if it meets the teacher force criteria 
     if teacher_force: 
             for di in range(target_length):
-                decoder_output = decoder(decoder_input, decoder_hidden, encoder_output_t)
-                decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_output_t)
-                decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
                 loss += criterion(decoder_output, target_tensor[di])
                 #use previous value to teacher force
                 decoder_input = target_tensor[di]
-                if decoder_intput.item() == EOS_index:
+                if decoder_input.item() == EOS_index:
                     break
     else: 
         for di in range(target_length):
-                decoder_output = decoder(decoder_input, decoder_hidden, encoder_output_t)
-                decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_output_t)
-                decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
+                decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, decoder_hidden, encoder_output_t)
                 loss += criterion(decoder_output, target_tensor[di])
                 #if not teacher forcing, get the top prediction and detach from history 
-                top_v = decoder_output.data.topk(1)
-                top_i = decoder_output.data.topk(1)
+                top_v, top_i = decoder_output.data.topk(1)
                 decoder_input = top_i.squeeze().detach()
-                if decoder_intput.item() == EOS_index:
+                if decoder_input.item() == EOS_index:
                     break
 
     loss.backward()
@@ -317,7 +305,7 @@ def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_L
     with torch.no_grad():
         input_tensor = tensor_from_sentence(src_vocab, sentence)
         input_length = input_tensor.size()[0]
-        encoder.get_initial_hidden_state()
+        encoder_hidden = encoder.get_initial_hidden_state()
 
         encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
 
@@ -428,13 +416,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--hidden_size', default=256, type=int,
                     help='hidden size of encoder/decoder, also word vector size')
-    ap.add_argument('--n_iters', default=100000, type=int,
+    ap.add_argument('--n_iters', default=150000, type=int,
                     help='total number of examples to train on')
     ap.add_argument('--print_every', default=5000, type=int,
                     help='print loss info every this many training examples')
     ap.add_argument('--checkpoint_every', default=10000, type=int,
                     help='write out checkpoint every this many training examples')
-    ap.add_argument('--initial_learning_rate', default=0.001, type=int,
+    ap.add_argument('--initial_learning_rate', default=0.0006, type=int,
                     help='initial learning rate')
     ap.add_argument('--src_lang', default='fr',
                     help='Source (input) language code, e.g. "fr"')
