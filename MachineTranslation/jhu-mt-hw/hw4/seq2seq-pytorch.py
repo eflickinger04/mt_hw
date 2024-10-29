@@ -132,31 +132,6 @@ def tensors_from_pair(src_vocab, tgt_vocab, pair):
     return input_tensor, target_tensor
 
 ######################################################################
-class CustomLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(CustomLSTM, self).__init__()
-        self.hidden_size = hidden_size
-        self.input_size = input_size
-        self.W_f = nn.Linear(input_size + hidden_size, hidden_size)  # Forget gate
-        self.W_i = nn.Linear(input_size + hidden_size, hidden_size)  # Input gate
-        self.W_o = nn.Linear(input_size + hidden_size, hidden_size)  # Output gate
-        self.W_c = nn.Linear(input_size + hidden_size, hidden_size)  # Cell input
-
-    def forward(self, x_t, h_prev, c_prev):
-        combined_vector = torch.cat((x_t, h_prev), dim=1)
-        # Forget gate
-        f_t = torch.sigmoid(self.W_f(combined_vector))
-        # Input gate
-        i_t = torch.sigmoid(self.W_i(combined_vector))
-        # Output gate
-        o_t = torch.sigmoid(self.W_o(combined_vector))
-        # Cell candidate
-        c_tilde = torch.tanh(self.W_c(combined_vector))
-        # Cell state
-        c_t = f_t * c_prev + i_t * c_tilde
-        # Hidden state
-        h_t = o_t * torch.tanh(c_t)
-        return h_t, c_t
 
 
 class EncoderRNN(nn.Module):
