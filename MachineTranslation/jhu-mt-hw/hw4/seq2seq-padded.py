@@ -147,13 +147,22 @@ def prepare_batch(pairs, src_vocab, tgt_vocab):
         input_tensors.append(input_tensor)
         target_tensors.append(target_tensor)
 
-    input_lengths = [len(t) for t in input_tensors]
-    target_lengths = [len(t) for t in target_tensors]
+    # Compute lengths before padding
+    input_lengths = torch.tensor([len(t) for t in input_tensors], dtype=torch.long)
+    target_lengths = torch.tensor([len(t) for t in target_tensors], dtype=torch.long)
 
+    # Pad sequences to the max length within the batch
     input_batch = pad_sequence(input_tensors, batch_first=True, padding_value=EOS_index)
     target_batch = pad_sequence(target_tensors, batch_first=True, padding_value=EOS_index)
 
+    # Sort the batch by input_lengths in descending order
+    input_lengths, perm_idx = input_lengths.sort(0, descending=True)
+    input_batch = input_batch[perm_idx]
+    target_batch = target_batch[perm_idx]
+    target_lengths = target_lengths[perm_idx]
+
     return input_batch, target_batch, input_lengths, target_lengths
+
 
 
 class EncoderRNN(nn.Module):
@@ -173,62 +182,66 @@ class EncoderRNN(nn.Module):
         outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         return outputs, hidden
 
-
 class AttnDecoderRNN(nn.Module):
-    def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
+    def __init__(self, hidden_size, output_size, dropout_p=0.1):
         super(AttnDecoderRNN, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout_p = dropout_p
-        self.max_length = max_length
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
-        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
         self.dropout = nn.Dropout(self.dropout_p)
+        self.attn_combine = nn.Linear(hidden_size * 2, hidden_size)
         self.lstm = nn.LSTM(hidden_size, hidden_size, batch_first=True)
         self.out = nn.Linear(hidden_size, output_size)
 
     def forward(self, decoder_input, decoder_hidden, encoder_outputs):
-        # decoder_input: batch_size x 1
-        # decoder_hidden: (h_n, c_n)
+        """
+        Args:
+            decoder_input: Tensor of shape (batch_size, 1)
+            decoder_hidden: Tuple (h_n, c_n), each of shape (num_layers, batch_size, hidden_size)
+            encoder_outputs: Tensor of shape (batch_size, seq_len, hidden_size)
+        Returns:
+            output: Tensor of shape (batch_size, output_size)
+            decoder_hidden: Updated hidden state tuple
+            attn_weights: Tensor of shape (batch_size, seq_len)
+        """
         batch_size = decoder_input.size(0)
-        embedded = self.embedding(decoder_input)  # batch_size x 1 x hidden_size
+        embedded = self.embedding(decoder_input)  # (batch_size, 1, hidden_size)
         embedded = self.dropout(embedded)
 
-        # attn weights 
-        hidden_h = decoder_hidden[0].transpose(0,1)  # batch_size x num_layers x hidden_size
-        hidden_h = hidden_h[:, -1, :]  # batch_size x hidden_size
+        # Get the last layer's hidden state
+        hidden_h = decoder_hidden[0][-1]  # (batch_size, hidden_size)
+        hidden_h = hidden_h.unsqueeze(2)   # (batch_size, hidden_size, 1)
 
-        attn_weights = F.softmax(
-            self.attn(torch.cat((embedded[:, 0, :], hidden_h), 1)),
-            dim=1)  # batch_size x max_length
+        # Compute attention energies
+        attn_energies = torch.bmm(encoder_outputs, hidden_h).squeeze(2)  # (batch_size, seq_len)
 
-        attn_weights = attn_weights.unsqueeze(1)  # batch_size x 1 x max_length
+        # Mask out the positions beyond the actual lengths if necessary
+        # (Optional) Apply masking here if using padding
 
-        encoder_outputs = encoder_outputs.contiguous()
+        # Compute attention weights
+        attn_weights = F.softmax(attn_energies, dim=1)  # (batch_size, seq_len)
 
-        attn_applied = torch.bmm(attn_weights, encoder_outputs)  # batch_size x 1 x hidden_size
+        # Compute context vector as the weighted sum of encoder outputs
+        attn_weights = attn_weights.unsqueeze(1)  # (batch_size, 1, seq_len)
+        context = torch.bmm(attn_weights, encoder_outputs)  # (batch_size, 1, hidden_size)
 
-        output = torch.cat((embedded[:, 0, :], attn_applied[:, 0, :]), 1)  # batch_size x (hidden_size * 2)
-
-        output = self.attn_combine(output).unsqueeze(1)  # batch_size x 1 x hidden_size
-
+        # Concatenate embedded input and context
+        output = torch.cat((embedded, context), dim=2)  # (batch_size, 1, hidden_size * 2)
+        output = self.attn_combine(output)  # (batch_size, 1, hidden_size)
         output = F.relu(output)
 
-        output, decoder_hidden = self.lstm(output, decoder_hidden)  # output: batch_size x 1 x hidden_size
+        output, decoder_hidden = self.lstm(output, decoder_hidden)  # output: (batch_size, 1, hidden_size)
+        output = F.log_softmax(self.out(output.squeeze(1)), dim=1)  # (batch_size, output_size)
 
-        output = F.log_softmax(self.out(output[:, 0, :]), dim=1)  # batch_size x output_size
-
-        return output, decoder_hidden, attn_weights.squeeze(1)  # attn_weights: batch_size x max_length
-
+        return output, decoder_hidden, attn_weights.squeeze(1)  # attn_weights: (batch_size, seq_len)
 
 
 ######################################################################
 
-def train(input_tensor, target_tensor, input_lengths, target_lengths, encoder, decoder, optimizer, criterion, max_length=MAX_LENGTH):
+def train(input_tensor, target_tensor, input_lengths, target_lengths, encoder, decoder, optimizer, criterion):
     batch_size = input_tensor.size(0)
-    encoder_hidden = None
 
     encoder.train()
     decoder.train()
@@ -237,12 +250,12 @@ def train(input_tensor, target_tensor, input_lengths, target_lengths, encoder, d
     loss = 0
 
     encoder_outputs, encoder_hidden = encoder(input_tensor, input_lengths)
-    #batch_size x max_input_length x hidden_size
+    # encoder_outputs: (batch_size, seq_len, hidden_size)
 
-    decoder_input = torch.tensor([SOS_index] * batch_size, device=device).unsqueeze(1)  # batch_size x 1
-    decoder_hidden = encoder_hidden 
+    decoder_input = torch.tensor([SOS_index] * batch_size, device=device).unsqueeze(1)  # (batch_size, 1)
+    decoder_hidden = encoder_hidden
 
-    max_target_length = max(target_lengths)
+    max_target_length = target_tensor.size(1)
 
     use_teacher_forcing = random.random() < 0.5
 
@@ -250,29 +263,69 @@ def train(input_tensor, target_tensor, input_lengths, target_lengths, encoder, d
         for di in range(max_target_length):
             decoder_output, decoder_hidden, decoder_attention = decoder(
                 decoder_input, decoder_hidden, encoder_outputs)
-                #batch_size x output_size
-            target = target_tensor[:, di]  # batch_size
+            target = target_tensor[:, di]  # (batch_size)
             loss += criterion(decoder_output, target)
-            decoder_input = target.unsqueeze(1) 
+            decoder_input = target.unsqueeze(1)  # (batch_size, 1)
     else:
         for di in range(max_target_length):
             decoder_output, decoder_hidden, decoder_attention = decoder(
                 decoder_input, decoder_hidden, encoder_outputs)
-                #batch_size x output_size
             topv, topi = decoder_output.topk(1)
-            decoder_input = topi.detach()  # batch_size x 1
-            target = target_tensor[:, di]  # batch_size
+            decoder_input = topi.detach()  # (batch_size, 1)
+            target = target_tensor[:, di]  # (batch_size)
             loss += criterion(decoder_output, target)
 
     loss.backward()
-
-
     torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
     torch.nn.utils.clip_grad_norm_(decoder.parameters(), max_norm=1.0)
-
     optimizer.step()
 
-    return loss.item() / sum(target_lengths)
+    return loss.item() / batch_size
+
+def translate(encoder, decoder, sentence, src_vocab, tgt_vocab, max_length=MAX_LENGTH):
+    """
+    Translates a single sentence using the encoder and decoder models.
+    """
+    # Set models to evaluation mode
+    encoder.eval()
+    decoder.eval()
+
+    with torch.no_grad():
+        # Prepare input tensor
+        input_tensor = tensor_from_sentence(src_vocab, sentence).unsqueeze(0)  # Shape: (1, seq_len)
+        input_lengths = torch.tensor([input_tensor.size(1)], dtype=torch.long, device=device)  # Shape: (1)
+
+        # Move tensors to device
+        input_tensor = input_tensor.to(device)
+        input_lengths = input_lengths.to(device)
+
+        # Encode the input sentence
+        encoder_outputs, encoder_hidden = encoder(input_tensor, input_lengths)
+
+        # Initialize decoder input and hidden state
+        decoder_input = torch.tensor([SOS_index], device=device).unsqueeze(0).unsqueeze(1)  # Shape: (1, 1, 1)
+        decoder_hidden = encoder_hidden
+
+        decoded_words = []
+        decoder_attentions = torch.zeros(max_length, encoder_outputs.size(1), device=device)
+
+        for di in range(max_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(
+                decoder_input.squeeze(1), decoder_hidden, encoder_outputs)
+            decoder_attentions[di] = decoder_attention[0]
+
+            # Get top prediction
+            topv, topi = decoder_output.data.topk(1)
+            if topi.item() == EOS_index:
+                decoded_words.append(EOS_token)
+                break
+            else:
+                decoded_words.append(tgt_vocab.index2word.get(topi.item(), '<UNK>'))
+
+            # Prepare next input
+            decoder_input = topi.detach().unsqueeze(1)  # Shape: (1, 1)
+
+        return decoded_words, decoder_attentions[:di + 1]
 
 ######################################################################
 
@@ -430,7 +483,7 @@ def main():
             input_batch, target_batch, input_lengths, target_lengths = prepare_batch(batch_pairs, src_vocab, tgt_vocab)
 
             # sort batch in desc order of input_lengths (required for pack_padded_sequence)
-            input_lengths, perm_idx = torch.tensor(input_lengths).sort(0, descending=True)
+            input_lengths, perm_idx = (input_lengths).sort(0, descending=True)
             input_batch = input_batch[perm_idx]
             target_batch = target_batch[perm_idx]
             target_lengths = [target_lengths[j] for j in perm_idx]
