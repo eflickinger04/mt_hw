@@ -409,7 +409,7 @@ def main():
                     help='hidden size of encoder/decoder, also word vector size')
     ap.add_argument('--n_iters', default=150000, type=int,
                     help='total number of examples to train on')
-    ap.add_argument('--print_every', default=5000, type=int,
+    ap.add_argument('--print_every', default=1000, type=int,
                     help='print loss info every this many training examples')
     ap.add_argument('--batch_size', default=32, type=int,
                     help='Batch size for training')
@@ -478,7 +478,7 @@ def main():
     for epoch in range(args.num_epochs):
         random.shuffle(train_pairs) 
         for i in range(0, len(train_pairs), batch_size):
-            iteration += 1
+            iteration += batch_size
             batch_pairs = train_pairs[i:i+batch_size]
             input_batch, target_batch, input_lengths, target_lengths = prepare_batch(batch_pairs, src_vocab, tgt_vocab)
 
