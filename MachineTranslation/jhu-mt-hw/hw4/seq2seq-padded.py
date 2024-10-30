@@ -147,15 +147,15 @@ def prepare_batch(pairs, src_vocab, tgt_vocab):
         input_tensors.append(input_tensor)
         target_tensors.append(target_tensor)
 
-    # Compute lengths before padding
+    # compute lengths 
     input_lengths = torch.tensor([len(t) for t in input_tensors], dtype=torch.long)
     target_lengths = torch.tensor([len(t) for t in target_tensors], dtype=torch.long)
 
-    # Pad sequences to the max length within the batch
+    # pad sequences to the max length 
     input_batch = pad_sequence(input_tensors, batch_first=True, padding_value=EOS_index)
     target_batch = pad_sequence(target_tensors, batch_first=True, padding_value=EOS_index)
 
-    # Sort the batch by input_lengths in descending order
+    # sort the batch by input_lengths 
     input_lengths, perm_idx = input_lengths.sort(0, descending=True)
     input_batch = input_batch[perm_idx]
     target_batch = target_batch[perm_idx]
@@ -210,24 +210,14 @@ class AttnDecoderRNN(nn.Module):
         embedded = self.embedding(decoder_input)  # (batch_size, 1, hidden_size)
         embedded = self.dropout(embedded)
 
-        # Get the last layer's hidden state
         hidden_h = decoder_hidden[0][-1]  # (batch_size, hidden_size)
         hidden_h = hidden_h.unsqueeze(2)   # (batch_size, hidden_size, 1)
 
-        # Compute attention energies
         attn_energies = torch.bmm(encoder_outputs, hidden_h).squeeze(2)  # (batch_size, seq_len)
-
-        # Mask out the positions beyond the actual lengths if necessary
-        # (Optional) Apply masking here if using padding
-
-        # Compute attention weights
         attn_weights = F.softmax(attn_energies, dim=1)  # (batch_size, seq_len)
-
-        # Compute context vector as the weighted sum of encoder outputs
         attn_weights = attn_weights.unsqueeze(1)  # (batch_size, 1, seq_len)
         context = torch.bmm(attn_weights, encoder_outputs)  # (batch_size, 1, hidden_size)
 
-        # Concatenate embedded input and context
         output = torch.cat((embedded, context), dim=2)  # (batch_size, 1, hidden_size * 2)
         output = self.attn_combine(output)  # (batch_size, 1, hidden_size)
         output = F.relu(output)
@@ -482,7 +472,6 @@ def main():
             batch_pairs = train_pairs[i:i+batch_size]
             input_batch, target_batch, input_lengths, target_lengths = prepare_batch(batch_pairs, src_vocab, tgt_vocab)
 
-            # sort batch in desc order of input_lengths (required for pack_padded_sequence)
             input_lengths, perm_idx = (input_lengths).sort(0, descending=True)
             input_batch = input_batch[perm_idx]
             target_batch = target_batch[perm_idx]

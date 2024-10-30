@@ -380,7 +380,7 @@ def main():
     ap.add_argument('--initial_learning_rate', default=0.0006, type=int,
                     help='initial learning rate')
     ap.add_argument('--src_lang', default='fr',
-                    help='Source (input) language code, e.g. "fr"')
+                    help='Source (input) language code, e.g. l"fr"')
     ap.add_argument('--tgt_lang', default='en',
                     help='Source (input) language code, e.g. "en"')
     ap.add_argument('--train_file', default='data/fren.train.bpe',
